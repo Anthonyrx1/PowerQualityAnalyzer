@@ -1,0 +1,47 @@
+Harmonic Distortion Analysis Project Milestones
+===============================================
+
+Milestone 1 — Read and Inspect Data
+-----------------------------------
+- Load a CSV file with waveform data using pandas.
+- Print basic statistics to verify data loading.
+- Ensure you can access time and voltage columns.
+
+Milestone 2 — Generate or Use Test Data
+---------------------------------------
+- Create a synthetic waveform CSV (e.g., 60 Hz fundamental + 3rd harmonic).
+- Confirm known harmonic content for testing FFT accuracy.
+
+Milestone 3 — Implement FFT
+---------------------------
+- Use numpy.fft to convert time-domain data to frequency domain.
+- Plot the frequency spectrum to verify harmonic peaks visually.
+
+Milestone 4 — THD Calculation
+-----------------------------
+- Identify the fundamental frequency component.
+- Calculate Total Harmonic Distortion (THD) using the standard formula.
+- Output THD value to the console.
+
+Milestone 5 — Visualization
+---------------------------
+- Plot the time-domain waveform.
+- Plot the frequency-domain spectrum as a bar chart.
+- Save plots automatically to a /plots directory.
+
+Milestone 6 — IEEE 519 Compliance Check
+---------------------------------------
+- Compare calculated THD against IEEE 519 limits.
+- Print a PASS/FAIL message based on compliance.
+
+Milestone 7 — Filter Recommendation
+-----------------------------------
+- Identify dominant harmonic order.
+- Print a basic recommendation for a passive filter tuned to that harmonic.
+- Optionally, expand to calculate filter component values.
+
+Additional Tips
+---------------
+- Test after completing each milestone.
+- Document progress and update README.md with instructions and screenshots.
+- Use version control (e.g., git) to track changes incrementally.
