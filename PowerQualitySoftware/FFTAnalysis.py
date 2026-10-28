@@ -61,18 +61,41 @@ harmonics = []
 harmonicfreqs = []
 harmonic_num = 50
 
-fund_mag = pos_magnitudes[fundamental_idx]
+#Hann-windowed spectrum used ONLY for THD. The record is not an exact whole number of cycles,
+#so with no window the peak height depends on where the tone falls between FFT bins (scalloping)
+#and the fundamental/harmonics get under-read by different amounts.
+win_mags = np.abs(fft(combine * np.hanning(N)))[pos_freq_index]
 
-#loop for finding the nearest frequency to THD for all samples
+#Frequency resolution (Hz per FFT bin)
+bin_res = fs / N
+
+#Magnitude of a tone = energy summed over its main lobe (+/-2 bins), which doesn't depend
+#on the tone's offset from the nearest bin
+def band_mag(mags, center, k=2):
+    lo = max(center - k, 0)
+    return np.sqrt(np.sum(mags[lo:center + k + 1] ** 2))
+
+fund_idx_w = np.argmax(win_mags)
+fund_mag = band_mag(win_mags, fund_idx_w)
+
+#loop for finding the peak near each harmonic of the fundamental
 for i in range(2, harmonic_num + 1):
     targetfreq = i * fundamental_freq
 
-    
-    idx = np.argmin(np.abs(pos_frequencies - targetfreq))
+    #Skip harmonics above the Nyquist frequency (they would alias)
+    if targetfreq >= fs / 2:
+        break
 
-    #Storing magnitude at selected frequency
-    harmonics.append(pos_magnitudes[idx])
-    harmonicfreqs.append(pos_frequencies[idx])
+    #The fundamental was only located to within one FFT bin, and that error is multiplied
+    #by the harmonic order, so search a window around the target and take the peak.
+    #Window half-width grows with order but stays far below the 60 Hz harmonic spacing.
+    half_width = 2 * bin_res + i * bin_res
+    window = np.abs(pos_frequencies - targetfreq) <= half_width
+    local_idx = np.argmax(np.where(window, win_mags, -np.inf))
+
+    #Storing magnitude at the peak found near this harmonic
+    harmonics.append(band_mag(win_mags, local_idx))
+    harmonicfreqs.append(pos_frequencies[local_idx])
 
 harmonics = np.array(harmonics)
 
