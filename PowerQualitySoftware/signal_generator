@@ -1,0 +1,147 @@
+"""Synthetic voltage waveforms with known ground truth, for validating the analyzer.
+
+generate_signal() builds   v(t) = DC + sum_k A_k * sin(2*pi*k*f0*t + phi_k) + noise
+and returns the samples together with the TRUE RMS, fundamental frequency and THD, computed
+analytically from the chosen amplitudes (never from the samples), so the analyzer is graded
+against an independent answer.
+
+Definitions (these must match the analyzer in main.py):
+  * THD (%)  = 100 * sqrt(sum_{h=2..max_order} A_h^2) / A_1
+               Only harmonics 2..max_order count. Noise, DC and out-of-range orders are NOT harmonics.
+  * RMS (V)  = sqrt(DC^2 + sum_k A_k^2 / 2 + noise_variance)   (sinusoid of peak A has RMS A/sqrt(2))
+  * f0 (Hz)  = the fundamental you asked for.
+
+Quick use:
+    t, v, truth = generate_signal(f0=59.93, harmonics={3: 0.03, 5: 0.08}, snr_db=50, seed=1)
+    print(truth["thd"])          # 8.54 (percent)
+"""
+
+import numpy as np
+
+DEFAULT_FS = 10_000          # Hz, matches the project's CSV
+DEFAULT_N = 1_048_575        # samples, matches the project's CSV (1M+)
+DEFAULT_MAX_ORDER = 50       # THD is evaluated over harmonics 2..50
+
+
+def generate_signal(
+    f0=60.0,
+    fs=DEFAULT_FS,
+    n_samples=DEFAULT_N,
+    v1=1.0,
+    harmonics=None,
+    dc=0.0,
+    snr_db=None,
+    random_phase=True,
+    seed=None,
+    max_order=DEFAULT_MAX_ORDER,
+):
+    """Build a test waveform and its ground truth.
+
+    Parameters
+    ----------
+    f0           : fundamental frequency in Hz (use e.g. 59.93 to get a non-whole number of cycles)
+    fs           : sampling rate in Hz
+    n_samples    : number of samples
+    v1           : fundamental PEAK amplitude in volts
+    harmonics    : {order: amplitude as a fraction of the fundamental}, e.g. {5: 0.07} = 5th at 7%
+    dc           : DC offset in volts
+    snr_db       : noise level as signal-to-noise ratio in dB (signal power = AC power of the tones);
+                   None for a noiseless signal
+    random_phase : True -> random phase for the fundamental and every harmonic; False -> all zero
+    seed         : seed for the random generator, so results are reproducible
+    max_order    : highest harmonic that counts toward the true THD
+
+    Returns
+    -------
+    t     : time array in seconds (starts at 0)
+    v     : voltage samples
+    truth : dict with the true 'rms', 'fundamental_freq', 'thd' (percent), 'dc', 'harmonics'
+            (the {order: fraction} actually used), 'harmonic_pct' ({order: % of fundamental}), 'snr_db'
+    """
+    harmonics = dict(harmonics or {})
+    rng = np.random.default_rng(seed)
+
+    # ---- validate inputs (fail loudly: a bad test signal would silently ruin the validation) ----
+    if f0 <= 0 or fs <= 0 or v1 <= 0:
+        raise ValueError("f0, fs and v1 must be positive.")
+    if n_samples < 2:
+        raise ValueError("n_samples must be at least 2.")
+    nyquist = fs / 2
+    if f0 >= nyquist:
+        raise ValueError(f"Fundamental {f0} Hz is at or above Nyquist ({nyquist} Hz).")
+    for order, frac in harmonics.items():
+        if int(order) != order or order < 2:
+            raise ValueError(f"Harmonic order must be an integer >= 2, got {order!r}.")
+        if frac < 0:
+            raise ValueError(f"Harmonic {order} has a negative amplitude fraction.")
+        if order * f0 >= nyquist:
+            raise ValueError(
+                f"Harmonic {order} at {order * f0:.1f} Hz is at or above Nyquist ({nyquist} Hz); "
+                "it would alias. Lower the order or raise fs."
+            )
+
+    # ---- build the waveform ----
+    dt = 1.0 / fs
+    t = np.arange(n_samples) * dt
+
+    def phase():
+        return rng.uniform(0, 2 * np.pi) if random_phase else 0.0
+
+    v = np.full(n_samples, float(dc))
+    v += v1 * np.sin(2 * np.pi * f0 * t + phase())
+    for order in sorted(harmonics):
+        amp = v1 * harmonics[order]
+        if amp > 0:
+            v += amp * np.sin(2 * np.pi * order * f0 * t + phase())
+
+    # ---- ground truth, from the amplitudes (not from the samples) ----
+    amps = {1: v1, **{k: v1 * f for k, f in harmonics.items()}}
+    ac_power = sum(a * a / 2 for a in amps.values())            # mean square of the AC tones
+    in_thd = [v1 * f for k, f in harmonics.items() if k <= max_order]
+    thd = 100 * np.sqrt(sum(a * a for a in in_thd)) / v1
+
+    noise_var = 0.0
+    if snr_db is not None:
+        noise_var = ac_power / (10 ** (snr_db / 10))
+        v += rng.normal(0.0, np.sqrt(noise_var), n_samples)
+
+    truth = {
+        "rms": float(np.sqrt(dc ** 2 + ac_power + noise_var)),
+        "fundamental_freq": float(f0),
+        "thd": float(thd),
+        "dc": float(dc),
+        "harmonics": harmonics,
+        "harmonic_pct": {k: 100 * f for k, f in harmonics.items()},
+        "snr_db": snr_db,
+    }
+    return t, v, truth
+
+
+def harmonics_for_thd(thd_percent, orders, rng=None, spread=1.0):
+    """Pick harmonic amplitudes that add up to EXACTLY the requested THD.
+
+    thd_percent : target THD in percent
+    orders      : which harmonic orders to use, e.g. [3, 5, 7, 11, 13]
+    rng         : numpy Generator (pass one built from a seed for reproducibility)
+    spread      : 0 -> all harmonics equal; larger -> more uneven split between them
+
+    Returns {order: fraction of fundamental}, ready for generate_signal(harmonics=...).
+    """
+    orders = list(orders)
+    if not orders:
+        raise ValueError("Need at least one harmonic order.")
+    if thd_percent < 0:
+        raise ValueError("thd_percent must be non-negative.")
+    rng = rng or np.random.default_rng()
+    weights = np.ones(len(orders)) if spread == 0 else rng.uniform(0.2, 1.0, len(orders)) ** spread
+    weights = weights / np.sqrt(np.sum(weights ** 2))           # unit vector -> sqrt(sum w^2) = 1
+    fractions = weights * (thd_percent / 100)                   # so sqrt(sum f^2) = THD/100 exactly
+    return {int(o): float(f) for o, f in zip(orders, fractions)}
+
+
+if __name__ == "__main__":
+    # Smoke test: print what the generator produces for one case.
+    t, v, truth = generate_signal(f0=59.93, harmonics={3: 0.03, 5: 0.08, 7: 0.05}, snr_db=50, seed=1)
+    print(f"{len(v):,} samples, last t = {t[-1]:.3f} s")
+    for k in ("rms", "fundamental_freq", "thd", "snr_db"):
+        print(f"true {k}: {truth[k]}")
